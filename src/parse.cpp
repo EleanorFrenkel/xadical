@@ -96,6 +96,38 @@ inline const char *Parser::parse_lit (int &ch, int &lit, int &vars,
   return 0;
 }
 
+inline const char *Parser::parse_lin (int &ch, int &lin, int &vars,
+                                      int strict) {
+  int sign = 0;
+  if (ch == '-') {
+    if (!isdigit (ch = parse_char ()))
+      PER ("expected digit after '-'");
+    sign = -1;
+  } else if (!isdigit (ch))
+    PER ("expected digit or '-'");
+  else
+    sign = 1;
+  lin = ch - '0';
+  while (isdigit (ch = parse_char ())) {
+    int digit = ch - '0';
+    if (INT_MAX / 10 < lin || INT_MAX - digit < 10 * lin)
+      PER ("literal too large");
+    lin = 10 * lin + digit;
+  }
+  if (ch == '\r')
+    ch = parse_char ();
+  if (ch != 'c' && ch != '+' && ch != ' ' && ch != '\t' && ch != '\n' && ch != EOF)
+    PER ("expected white space or '+' after '%d'", sign * lin);
+  if (lin > vars) {
+    if (strict != FORCED)
+      PER ("literal %d exceeds maximum variable %d", sign * lin, vars);
+    else
+      vars = lin;
+  }
+  lin *= sign;
+  return 0;
+}
+
 /*------------------------------------------------------------------------*/
 
 // Parsing CNF in DIMACS format.
@@ -136,8 +168,16 @@ const char *Parser::parse_dimacs_non_profiled (int &vars, int strict) {
       solver->set_long_option (o);
   }
 
+  if(ch == 'x') {
+#ifndef QUIET
+    return parse_xnf_non_profiled(vars, strict, start);
+#else
+    return parse_xnf_non_profiled(vars, strict, 0.0);
+#endif
+  }
+
   if (ch != 'p')
-    PER ("expected 'c' or 'p'");
+    PER ("expected 'c', 'p', or 'x'");
 
   ch = parse_char ();
   if (strict == STRICT) {
@@ -389,6 +429,167 @@ const char *Parser::parse_dimacs_non_profiled (int &vars, int strict) {
 
 /*------------------------------------------------------------------------*/
 
+// Parsing XNF
+
+const char *Parser::parse_xnf_non_profiled (int &vars, int strict, double start) {
+  int ch = 0, declared = 0;
+  uint64_t clauses = 0;
+
+  ch = parse_char ();
+  if (strict == STRICT) {
+    if (ch != ' ')
+      PER ("expected space after 'x'");
+    ch = parse_char ();
+  } else if (ch != ' ' && ch != '\t')
+    PER ("expected white space after 'x'");
+  else {
+    do
+      ch = parse_char ();
+    while (ch == ' ' || ch == '\t');
+  }
+
+  // Now read 'p xnf <var> <clauses>' header
+  if (ch == 'x') {
+    if (strict == STRICT) {
+      const char *err = parse_string ("nf ", 'x');
+      if (err)
+        return err;
+      ch = parse_char ();
+      if (!isdigit (ch))
+        PER ("expected digit after 'p xnf '");
+      err = parse_positive_int (ch, vars, "<max-var>");
+      if (err)
+        return err;
+      if (ch != ' ')
+        PER ("expected ' ' after 'p xnf %d'", vars);
+      if (!isdigit (ch = parse_char ()))
+        PER ("expected digit after 'p xnf %d '", vars);
+      err = parse_positive_uint64_t (ch, clauses, "<num-clauses>");
+      if (err)
+        return err;
+      if (ch != '\n')
+        PER ("expected new-line after 'p xnf %d %" PRIu64 "'", vars,
+             clauses);
+    } else {
+      if (parse_char () != 'n')
+        PER ("expected 'n' after 'p x'");
+      if (parse_char () != 'f')
+        PER ("expected 'f' after 'p xn'");
+      ch = parse_char ();
+      if (!isspace (ch))
+        PER ("expected space after 'p xnf'");
+      do
+        ch = parse_char ();
+      while (isspace (ch));
+      if (!isdigit (ch))
+        PER ("expected digit after 'p xnf '");
+      const char *err = parse_positive_int (ch, vars, "<max-var>");
+      if (err)
+        return err;
+      if (!isspace (ch))
+        PER ("expected space after 'p xnf %d'", vars);
+      do
+        ch = parse_char ();
+      while (isspace (ch));
+      if (!isdigit (ch))
+        PER ("expected digit after 'p xnf %d '", vars);
+      err = parse_positive_uint64_t (ch, clauses, "<num-clauses>");
+      if (err)
+        return err;
+      while (ch != '\n') {
+        if (ch != '\r' && !isspace (ch))
+          PER ("expected new-line after 'p xnf %d %" PRIu64 "'", vars,
+               clauses);
+        ch = parse_char ();
+      }
+    }
+
+    MSG ("found %s'p xnf %d %" PRIu64 "'%s header", tout.green_code (),
+         vars, clauses, tout.normal_code ());
+
+    // need to keep this after comment option parsing and before reserve_ids
+    solver->transition_to_steady_state ();
+    if (vars) {
+      assert (vars > 0);
+      solver->resize (vars);
+      declared = vars;
+    }
+
+    internal->reserve_ids (clauses);
+
+  } else
+    PER ("expected 'c' or 'i' after 'x '");
+
+  if (parse_inccnf_too)
+    *parse_inccnf_too = false;
+
+  // Now read body
+  int lin = 0;
+  uint64_t parsed = 0;
+  while ((ch = parse_char ()) != EOF) {
+    if (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r')
+      continue;
+    if (ch == 'c') {
+      while ((ch = parse_char ()) != '\n' && ch != EOF)
+        ;
+      if (ch == EOF)
+        break;
+      continue;
+    }
+    if (internal->terminated_asynchronously ())
+      return "parsing interrupted by signal";
+    const char *err = parse_lin (ch, lin, vars, strict);
+    if (err)
+      return err;
+    if (ch == 'c') {
+      while ((ch = parse_char ()) != '\n')
+        if (ch == EOF)
+          PER ("unexpected end-of-file in comment");
+    }
+    if (vars > declared) {
+      assert (strict == FORCED);
+      const int more_vars = vars - declared;
+      assert (more_vars > 0);
+      const int start = solver->declare_more_variables (more_vars);
+      assert (vars == start + more_vars - 1);
+      declared = vars;
+#ifdef NDEBUG
+      (void) start;
+#endif
+    }
+    // vvv needs to by implemented vvv
+    solver->addToLin (lin);
+    if(ch != '+') {
+      // Clause like '1+-2+3 4+5' is made up of two or-separated linerals 
+      // (1 xor -2 xor 3) or (4 xor 5)
+      // TODO
+      // vvv needs to by implemented vvv
+      solver->endLin();
+    }
+    if (!lin && parsed++ >= clauses && strict != FORCED)
+      PER ("too many clauses");
+  }
+
+  if (lin)
+    PER ("last clause without terminating '0'");
+
+  if (parsed < clauses && strict != FORCED)
+    PER ("clause missing");
+
+#ifndef QUIET
+  double end = internal->time ();
+  MSG ("parsed %" PRIu64 " clauses in %.2f seconds %s time", parsed,
+       end - start, internal->opts.realtime ? "real" : "process");
+#endif
+
+#ifndef QUIET
+  start = end;
+#endif
+  return 0;
+}
+
+/*------------------------------------------------------------------------*/
+
 // Parsing solution in competition output format.
 
 const char *Parser::parse_solution_non_profiled () {
@@ -468,6 +669,16 @@ const char *Parser::parse_dimacs (int &vars, int strict) {
   assert (strict == FORCED || strict == RELAXED || strict == STRICT);
   PROFILE_SCOPE (parse);
   return parse_dimacs_non_profiled (vars, strict);
+}
+
+const char *Parser::parse_xnf (int &vars, int strict) {
+  assert (strict == FORCED || strict == RELAXED || strict == STRICT);
+  PROFILE_SCOPE (parse);
+#ifndef QUIET
+  return parse_xnf_non_profiled(vars, strict, internal->time ());
+#else
+  return parse_xnf_non_profiled(vars, strict, 0.0);
+#endif
 }
 
 const char *Parser::parse_solution () {

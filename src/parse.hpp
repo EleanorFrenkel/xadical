@@ -36,7 +36,9 @@ class Parser {
   const char *parse_positive_uint64_t (int &ch, uint64_t &res,
                                        const char *name);
   const char *parse_lit (int &ch, int &lit, int &vars, int strict);
+  const char *parse_lin (int &ch, int &lit, int &vars, int strict);
   const char *parse_dimacs_non_profiled (int &vars, int strict);
+  const char *parse_xnf_non_profiled (int &vars, int strict, double start);
   const char *parse_solution_non_profiled ();
 
   bool *parse_inccnf_too;
@@ -62,6 +64,8 @@ public:
   // '1' exactly relaxes this, e.g., 'p cnf \t  1   3  \r\n' becomes legal.
   //
   const char *parse_dimacs (int &vars, int strict);
+
+  const char *parse_xnf (int &vars, int strict);
 
   // Parse a solution file as used in the SAT competition, e.g., with
   // comment lines 'c ...', a status line 's ...' and value lines 'v ...'.

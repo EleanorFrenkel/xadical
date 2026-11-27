@@ -261,6 +261,16 @@ public:
   //
   void add (int lit);
 
+  // Add valid literal to lineral in clause or zero to terminate clause.
+  //
+  //   require (VALID)                  // recall 'VALID = READY | ADDING'
+  //   if (lin) ensure (ADDING)         // and thus VALID but not READY
+  //   if (!lin) ensure (STEADY )       // and thus READY
+  void addToLin (int lin);
+
+  // Finish current lineral of clause
+  void endLin ();
+
   // Here are functions simplifying clause addition. The given literals
   // should all be valid (different from 'INT_MIN' and different from '0').
   //

@@ -785,6 +785,49 @@ void Solver::add (int lit) {
   LOG_API_CALL_END ("add", lit);
 }
 
+void Solver::addToLin (int lit) {
+  // TODO 
+  // Adapt everything
+  TRACE (add, "add", lit);
+  REQUIRE (state () & (READY | ADDING), "state not ready or adding");
+  if (lit) {
+    REQUIRE_VALID_MOLTEN_LIT (lit);
+    if (internal->opts.factor && internal->opts.factorcheck == 1)
+      REQUIRE (
+          abs (lit) <= external->max_var,
+          "adding literal '%d' with undeclared variable '%d' "
+          "(checking that user variables are declared explicitly failed "
+          "as both 'factor' and 'factorcheck' are enabled)",
+          lit, (int) abs (lit));
+    if (internal->opts.factorcheck == 2)
+      REQUIRE (
+          abs (lit) <= external->max_var,
+          "adding literal '%d' with undeclared variable '%d' "
+          "(checking that user variables are declared explicitly failed "
+          "as 'factorcheck == 2' even if 'factor' is disabled)",
+          lit, (int) abs (lit));
+    REQUIRE (external->is_valid_input ((int) lit),
+             "extension variable '%d' defined by the solver internally "
+             "(all user variables have to be declared explicitly "
+             "if 'factor' is enabled)",
+             (int) abs (lit));
+  }
+  assert (!adding_constraint);
+  transition_to_steady_state ();
+  external->add (lit);
+  adding_clause = lit;
+  if (adding_clause)
+    STATE (ADDING);
+  else
+    STATE (STEADY);
+  LOG_API_CALL_END ("add", lit);
+}
+
+void Solver::endLin () {
+  // TODO
+  // Implement
+}
+
 void Solver::clause (int a) {
   REQUIRE_VALID_LIT (a);
   add (a), add (0);
